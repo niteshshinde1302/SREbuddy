@@ -1,0 +1,51 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_models: /root/.ollama
+    networks:
+      - srebuddy-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: images/api/Dockerfile
+    container_name: srebuddy-api
+    ports:
+      - "${API_PORT}:8000"
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - MODEL_NAME=${MODEL_NAME}
+    networks:
+      - srebuddy-network
+    dependes_on:
+      ollama:
+        condition: service_healthy
+
+  ui:
+    build:
+      context: .
+      dockerfile: images/ui/Dockerfile
+    container_name: srebuddy-ui
+    ports:
+      - "${UI_PORT}:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    networks:
+      - srebuddy-network
+    dependes_on:
+      - api
+
+networks:
+  srebuddy-network:
+    driver: bridge
+
+volumes:
+  ollama_models:
