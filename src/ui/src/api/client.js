@@ -20,7 +20,10 @@ async function parseJson(res) {
   try {
     return await res.json()
   } catch {
-    return null
+    // Malformed body on an otherwise-OK response: surface it at the source as
+    // an ApiError so call sites handle it via their existing default branch,
+    // rather than leaking null into a dereference downstream.
+    throw new ApiError(res.status, 'Malformed response body')
   }
 }
 

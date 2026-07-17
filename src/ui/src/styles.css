@@ -76,6 +76,16 @@ body {
   background: var(--panel-2);
 }
 
+/* App-level backend-unreachable banner (below the top bar) */
+.app__error {
+  flex: 0 0 auto;
+  background: rgba(248, 113, 113, 0.12);
+  border-bottom: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 8px 20px;
+  font-size: 14px;
+}
+
 .body {
   display: flex;
   flex: 1 1 auto;
