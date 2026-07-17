@@ -44,7 +44,7 @@ Do not invent endpoints or change these shapes. The backend already exists.
 | Method | Path                          | Request body                        | Success response            | Errors |
 |--------|-------------------------------|-------------------------------------|-----------------------------|--------|
 | POST   | `/api/session`                | —                                   | `{"session_id": "<uuid>"}`  | —      |
-| GET    | `/api/session?session_id=<id>`| — (query param)                     | `"<session_id>"`            | 404 if session missing |
+| GET | `/api/session?session_id=<id>` | — (query param) | `{"messages": [{"role": "user"|"assistant", "content": str}], "last_activity_ts": float}` | 404 if session missing |
 | GET    | `/api/sessions`               | —                                   | `["<id>", "<id>"]`          | —      |
 | POST   | `/api/query`                  | `{"session_id": str, "message": str}` | `{"response": str}`       | 404 session missing, 502 LLM upstream failure |
 

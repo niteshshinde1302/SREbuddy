@@ -73,12 +73,10 @@ async def create_session() -> dict:
     return {"session_id": uuid_str}
 
 @router.get("/session")
-async def get_session(session_id: str) -> str:
-    sid=get_session_id(session_id=session_id)
-    if sid is not None:
-        return sid
-    else:
-        raise HTTPException(status_code=404, detail="Session Not found")
+async def get_session(session_id: str) -> dict:
+    if session_id not in conversations:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return conversations[session_id]   # or a Pydantic model of it
 
 @router.get("/sessions")
 async def get_all_sessions() -> list[str]:
