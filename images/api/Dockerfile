@@ -1,5 +1,5 @@
 # Stage 1: Build dependencies
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
@@ -10,10 +10,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY images/api/pyproject.toml .
 
 #Install dependencies
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 #Stage 2: Runtime / Build the application
-FROM python:3.11-slim as runtime
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
