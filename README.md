@@ -1,93 +1,156 @@
-# containerops-assistant
+# SREbuddy
 
+A containerized conversational SRE troubleshooting assistant. A user describes an
+operational problem — high CPU, memory pressure, a failing service — and the bot
+suggests triage steps in a multi-turn diagnostic loop: it proposes commands, the
+user reports results, and it narrows toward a root cause. Inference runs entirely
+on a local LLM via [Ollama](https://ollama.com/) (`qwen2.5:3b`); there is no
+external API and no data leaves the host.
 
+## Architecture
+
+Three containers behind a single published port:
+
+```
+Browser → nginx:80 (ui) ─┬─ "/"      → static React build
+                         └─ "/api/*" → proxy_pass → api:8000 (FastAPI)
+                                                      → ollama:11434
+```
+
+The design is a single-origin reverse proxy. The browser only ever talks to
+nginx on the published port. The `api` container has **no published port** — it
+is reachable only from inside the Docker network, via nginx, whose
+`/api/` location `proxy_pass`es to `http://api:8000`. Because the React app
+issues only **relative** `/api/...` requests, every call inherits the page's own
+origin (nginx), so requests reach the backend by construction and there is **no
+CORS** — there is only one origin.
+
+Ollama starts with no model weights, so an `ollama-pull` sidecar bootstraps the
+stack: it waits for `ollama` to become healthy, pulls `${MODEL_NAME}`, then
+exits. The `api` service depends on that sidecar via
+`condition: service_completed_successfully`, so it does not start serving until
+the model is present. This makes `docker compose up` self-contained — a clean
+machine reaches a working stack with one command, no manual pull step.
+
+Sessions are held in memory in the `api` process and expire after 30 minutes of
+inactivity. There is no push channel (no websockets/SSE); the UI discovers an
+expired session on its next request. nginx sets `proxy_read_timeout 600s` on the
+`/api/` location so a slow local generation is not cut off mid-response.
+
+## Tech stack
+
+- **Frontend:** React 18, Vite, React Router, plain CSS
+- **Edge / static serving:** nginx (reverse proxy + SPA fallback)
+- **Backend:** FastAPI, Uvicorn, Pydantic, the `ollama` Python client
+- **LLM runtime:** Ollama running `qwen2.5:3b`, fully local
+- **Packaging:** Docker + Docker Compose, multi-stage builds (`node`→`nginx`,
+  `uv`→`python-slim`)
+- **Session store:** in-process, in-memory (30-minute inactivity expiry)
 
 ## Getting started
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+### Prerequisites
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+- Docker Desktop (Compose v2)
 
-## Add your files
+### Configure
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Copy the example environment file and adjust if needed:
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/randomlearning/containerops-assistant.git
-git branch -M main
-git push -uf origin main
+```bash
+cp .env.example .env
 ```
 
-## Integrate with your tools
+| Variable          | Purpose                                              | Example                  |
+|-------------------|------------------------------------------------------|--------------------------|
+| `OLLAMA_BASE_URL` | Ollama endpoint the `api` uses for inference         | `http://ollama:11434`    |
+| `OLLAMA_HOST`     | Ollama endpoint the `ollama-pull` sidecar pulls from | `http://ollama:11434`    |
+| `MODEL_NAME`      | Model tag Ollama pulls and serves                    | `qwen2.5:3b`             |
+| `UI_PORT`         | Host port that maps to nginx (port 80 in-container)  | `8501`                   |
 
-* [Set up project integrations](https://gitlab.com/randomlearning/containerops-assistant/-/settings/integrations)
+### Run
 
-## Collaborate with your team
+```bash
+docker compose up --build
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+The first run downloads the model weights (**~2 GB** for `qwen2.5:3b`), which
+Ollama caches in a named volume, so subsequent starts are fast. Once the `api`
+container reports healthy, open:
 
-## Test and Deploy
+```
+http://localhost:${UI_PORT}      # e.g. http://localhost:8501
+```
 
-Use the built-in continuous integration in GitLab.
+## Backend API contract
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+| Method | Path                             | Request body                          | Success response                                                                          | Errors                                    |
+|--------|----------------------------------|---------------------------------------|-------------------------------------------------------------------------------------------|-------------------------------------------|
+| POST   | `/api/session`                   | —                                     | `{"session_id": "<uuid>"}`                                                                 | —                                         |
+| GET    | `/api/session?session_id=<id>`   | — (query param)                       | `{"messages": [{"role": "user"\|"assistant", "content": str}], "last_activity_ts": float}` | 404 if session missing                    |
+| GET    | `/api/sessions`                  | —                                     | `["<id>", "<id>"]`                                                                         | —                                         |
+| POST   | `/api/query`                     | `{"session_id": str, "message": str}` | `{"response": str}`                                                                        | 404 session missing, 502 LLM upstream fail |
 
-***
+## Project structure
 
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+```
+.
+├── docker-compose.yml            # 4 services: ollama, ollama-pull, api, ui
+├── .env.example
+├── images/
+│   ├── api/
+│   │   ├── Dockerfile            # uv → python-slim, multi-stage
+│   │   └── pyproject.toml
+│   └── ui/
+│       ├── Dockerfile            # node build → nginx, multi-stage
+│       └── default.conf          # nginx: SPA serving + /api reverse proxy
+├── src/
+│   ├── api/                      # FastAPI backend
+│   │   ├── main.py               # endpoints, in-memory sessions, expiry sweep
+│   │   └── prompts.py            # SRE system prompt + message assembly
+│   └── ui/                       # React SPA (Vite)
+│       ├── index.html
+│       ├── package.json
+│       ├── vite.config.js
+│       └── src/
+│           ├── main.jsx          # router
+│           ├── App.jsx           # layout + shared session state
+│           ├── api/client.js     # relative /api fetch wrappers
+│           └── components/       # TopBar, Sidebar, ChatView, ...
+└── CLAUDE.md                     # architecture + scope contract
+```
 
 ## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+- **CI/CD** — GitLab pipeline to build and publish both images.
+- **AWS ECS** — deploy the stack, first by hand, then codified in Terraform.
+- **Redis session store** — move sessions out of process so `api` can restart or
+  scale horizontally without losing conversations.
+- **Streaming responses** — stream tokens to the UI as they generate. This
+  removes the current nginx `proxy_read_timeout` workaround, since a streamed
+  connection produces bytes continuously rather than blocking on one long
+  response.
+- **Kubernetes** — migrate the orchestration to k8s once the above are in place.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## How this was built
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+I designed the architecture and own all of the infrastructure: the nginx
+reverse-proxy configuration, every Dockerfile, and the Docker Compose
+orchestration — including the `ollama-pull` model-bootstrap sidecar and the
+healthcheck-based dependency ordering (`service_healthy` /
+`service_completed_successfully`) that makes `docker compose up` self-contained.
+The FastAPI backend under `src/api/` is mine as well.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The React frontend under `src/ui/` was scaffolded by an AI coding assistant
+working inside a strict scope fence defined in `CLAUDE.md`. It was confined to
+`src/ui/`, forbidden from touching any infrastructure, and its output was
+reviewed against a hard constraint — **relative `/api/` paths only** — before
+merge, because an absolute URL would bypass nginx and break the single-origin
+model.
 
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+This split was deliberate. React was chosen over a batteries-included option
+like Streamlit precisely to force the real infrastructure concerns into the
+open — origins, ports, reverse proxying, CORS, container-to-container DNS — which
+is where the engineering interest of this project lives. The frontend internals
+were delegated so that attention stayed on the infrastructure rather than on
+component plumbing.
