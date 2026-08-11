@@ -19,3 +19,22 @@ build-api:       # This job runs in the build stage, which runs first.
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
+
+build-ui:
+  image: docker:29.7.2-cli
+  stage: build
+  services:
+    - docker:29.7.2-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+    DOCKER_TLS_VERIFY: 1
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE/ui:$CI_COMMIT_SHA -f images/ui/Dockerfile .
+    - docker push $CI_REGISTRY_IMAGE/ui:$CI_COMMIT_SHA
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
